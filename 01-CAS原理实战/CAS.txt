@@ -1,0 +1,156 @@
+主要内容：
+1. 从网站计数器实现中一步一步引出CAS操作
+2. 介绍Java中的CAS及CAS可能存在的问题
+----------------------------------------------------------------------------------------
+
+需求：我们开发一个网站，需要对访问量进行统计，用户每发送一次请求，访问量+1，如何实现？
+      我们模拟有100个人同时访问，并且每个人对我们的网站发起10次请求，最后总访问次数应该是1000次。
+
+完结。
+
+---------------------------------------------------------------------------------------
+
+JDK CAS支持
+CAS 全称“CompareAndSwap” 中文翻译过来就是“比较并替换”
+
+定义：
+    CAS操作包含三个操作数——内存位置（V）、期望值（A）和新值（B）。
+如果内存位置的值与期望值匹配，那么处理器会自动将该位置值更新为新值。
+否则，处理器不做任何操作。无论哪种情况，它都会在CAS指令之前返回该位置的值。
+（CAS在一些特殊情况，仅返回CAS是否成功，而不提取当前值）
+CAS有效的说明了“我认为位置V应该包含值A；如果包含该值，则将B放到这个位置；
+否则，不要更改该位置的值，只告诉我这个位置的值即可。”
+
+
+Q：怎么使用JDK提供的CAS支持？
+A：Java中提供了对CAS操作的支持，具体在sun。misc.Unsafe类中，声明如下：
+    public final native boolean compareAndSwapObject(Object var1, long var2, Object var4, Object var5);
+    public final native boolean compareAndSwapInt(Object var1, long var2, int var4, int var5);
+    public final native boolean compareAndSwapLong(Object var1, long var2, long var4, long var6);
+* 我们可以看到这些都是native修饰的，这就要引出了 “JNI” 的技术，自己搜索看看。
+* 比较并替换对象、比较并替换整型、比较并替换长整型。
+* 每个方法都是由4个参数构成的：
+    var1：表示要操作的对象（比较并替换，这个替换的数据肯定是某个对象里面的数据，这就是这里的对象）
+    var2：表示要操作属性地址中的偏移量（Java中对象是存放在内存堆里面，对应的有一个地址，这个地址只能知道这个对象，如果想要得到这个对象中的某个属性的值，这个值和对象的地址不太一样，相对于对象的地址，有一定的偏移，这就叫做偏移量）
+    var4：表示需要修改数据的期望的值（期望值与当前值一致，就可以替换了。就是我们手写的Demo中的count）
+    var5：表示需要修改为的新值
+* 方法的选取，如果var2的属性是Object，就用“比较并替换对象”，如果是int，就用“比较并替换整型”，如果是long，就用“比较并替换长整型”
+
+Q：CAS的实现原理是什么？
+A：CAS通过调用JNI的代码实现，JNI：Java Native Interface，语序Java调用其他语言。
+而compareAndSwapXxx系列的方法就是借助“C语言”来调用cpu底层指令实现的。
+    以常用的Intel x86平台来说，最终映射到cpu的指令为“cmpxchg”,
+    这是一个原子指令（不能在拆分了，要么都执行，要么都不执行，同一时刻，执行这个指令的时候，不能去执行其他的指令），
+    cup执行此命令时，实现比较并替换的操作！
+
+Q：现代计算机动不动就上百核，“cmpxchg”怎么保证多核心下的线程安全？
+A：系统底层进行CAS操作的时候，会判断当前系统是否为多核心系统，
+如果是，就给“总线”加锁（总线，连接物理通信的通道，连接内存条，连接显卡，连接多个CPU的通道，给这个通道加锁，其他硬件，同一时刻就没办法使用这个总线了，也就是说，其他的CPU就没法去执行运算了。）
+只有一个线程会总线加锁成功，加锁成功之后会执行CAS操作，也就说，CAS的原子性是平台级别的！（也就是说，不管多少个核，在执行cmpxchg的时候，只能有一个U去执行。）
+
+
+Q：CAS有没有什么问题？
+A：
+问题1：高并发情况下，会出现性能的问题。
+    我们还是拿Demo3的代码举例：
+        int expectCount;
+        while (!compareAndSwap(expectCount = getCount(), expectCount + 1)) {}
+    高并发情况下，我们对count这个块内存进行修改时：
+    所有线程都会去调用compareAndSwap()方法，该方法是加锁的，原子的串行的方法。
+    所以其他的线程在调用这个方法的时候都被阻塞住了，但是他们都已经将期望值（expectCount）和新值（expectCount+1）做好更新了。
+    就等着下一步拿到锁，进入compareAndSwap()方法内，做比较并替换操作了。
+    只有一个线程可以进入compareAndSwap()方法，它出来之后，会发现，它已经将这个count值给改变了。
+    其他线程，不管哪个线程，进入compareAndSwap()方法，会发现，拿到的count和expectCount不一样了，都会返回false。
+    然后开始下一轮的计算重试，知道成功为止。
+    这是高并发情况下，CAS的一个致命缺点。
+问题2：ABA问题。
+
+Q：什么是ABA问题？
+A：CAS需要在操作值的时候，检查值有没有发生什么变化，如果没有发生变化则更新，
+但是如果一个值原来是A，在CAS方法执行之前，被其他线程修改为B、然后又修改回A，
+那么CAS方法执行检查的时候会发现它的值没有发生变化，但是实际却变化了。这就是CAS的ABA问题。
+
+提示：使用程序模拟ABA问题。
+
+Q：如何解决ABA问题？
+A：解决ABA最简单的方案就是给值加一个修改版本号，每次值变化，都会修改它的版本号，CAS操作时都会去对比此版本号。
+如果系统对于ABA问题不是很敏感的话，就不用管它了。
+如果系统对于ABA问题很敏感，比如系统和银行挂钩，和钱挂钩的，建议不要使用和CAS相关的原子类了。
+    建议使用synchronized，这种强制同步的方式去保证数据安全性，这样会更好的去维持数据安全。
+假如说，系统对于安全性要求没有那么高，对并发要求很高的话，那么建议使用JDK给我们提供的解决方案。即：AtomicStampedReference
+AtomicStampedReference主要包含一个对象引用及一个可以自动更新的整数"stamp"的pair对象来解决ABA问题。
+
+提示：使用AtomicStampedReference修改ABA BUG。
+
+说明（AtomicStampedReference中的部分源码。）
+
+    一。** AtomicStampedReference中的内部类Pair，声明如下：
+    private static class Pair<T> {
+            final T reference;// 数据引用
+            final int stamp;// 版本号
+            private Pair(T reference, int stamp) {
+                this.reference = reference;
+                this.stamp = stamp;
+            }
+            static <T> Pair<T> of(T reference, int stamp) {
+                return new Pair<T>(reference, stamp);
+            }
+    }
+    private volatile Pair<V> pair;
+
+    // 这个类，如果要修改里面的数据的话，
+    // 不仅要提供原来的数据的引用，而且要提供原来数据的版本号，
+    // 只有这两个数据都对上了，我们才能够修改数据的值。
+    // 修改之后，会创建一个新的引用，赋值给volatile修饰的pair这个引用。
+
+    二。** 看一看compareAndSet()方法，声明如下：
+     /**
+          * Atomically sets the value of both the reference and stamp
+          * to the given update values if the
+          * current reference is {@code ==} to the expected reference
+          * and the current stamp is equal to the expected stamp.
+           如果当前引用是 {@code ==} 到预期引用
+           并且当前标记等于预期标记，则原子地将引用和标记的值设置为给定的更新值。
+          *
+          * @param expectedReference the expected value of the reference    期望引用
+          * @param newReference the new value for the reference             新值引用
+          * @param expectedStamp the expected value of the stamp            期望引用版本号
+          * @param newStamp the new value for the stamp                     新值版本号
+          * @return {@code true} if successful
+          */
+         public boolean compareAndSet(V   expectedReference,
+                                      V   newReference,
+                                      int expectedStamp,
+                                      int newStamp) {
+             Pair<V> current = pair;    // Pair<V> current = pair是基准。只有“期望引用”和“期望引用的版本号”都和“current”里面的值对应上了，才能够设置成功“新值引用”和“新值版本号”
+             return
+                 expectedReference == current.reference &&  // 期望引用与当前引用一致
+                 expectedStamp == current.stamp &&          // 期望版本与当前版本一致
+
+                 (
+                        (newReference == current.reference && newStamp == current.stamp)
+                                              // 新传进来的引用和当前的引用一致，并且新的版本和当前的版本一致，
+                                              // 表示当前的数据和已有的“current”是一致的，也就不用重新创建新的Pair对象了。
+                        ||
+                        casPair(current, Pair.of(newReference, newStamp))
+                                              // 如果新传进来的：expectedReference、newReference，与“current”内的版本、引用，有一个不相同
+                                              // 那么创建一个新的Pair，赋值给“current”。
+                  );
+         }
+
+    三。** Pair.of()方法，声明如下：
+    static <T> Pair<T> of(T reference, int stamp) {
+        return new Pair<T>(reference, stamp);
+    }
+    // 内部类Pair内的方法，就是用来创建Pair对象的。
+
+    四。** casPair()方法如下：
+    // 主要是为了交换，current和新创建的Pair的值。
+    private boolean casPair(Pair<V> cmp, Pair<V> val) {
+        return UNSAFE.compareAndSwapObject(this, pairOffset, cmp, val);
+    }
+    // 调用的是compareAndSwapObject()方法。
+    cmp：期望值，也就是现在的current
+    val：新值，也就是现在新创建的Pair对象
+    this：当前要操作的对象
+    pairOffset：表示要操作属性地址中的偏移量
