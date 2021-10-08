@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ProjectModuleManager">
+    <modules>
+      <module fileurl="file://$PROJECT_DIR$/01-CAS原理实战/01-CAS原理实战.iml" filepath="$PROJECT_DIR$/01-CAS原理实战/01-CAS原理实战.iml" />
+      <module fileurl="file://$PROJECT_DIR$/02-JDK8新特性-LongAdder/02-JDK8新特性-LongAdder.iml" filepath="$PROJECT_DIR$/02-JDK8新特性-LongAdder/02-JDK8新特性-LongAdder.iml" />
+      <module fileurl="file://$PROJECT_DIR$/03-红黑树/03-红黑树.iml" filepath="$PROJECT_DIR$/03-红黑树/03-红黑树.iml" />
+      <module fileurl="file://$PROJECT_DIR$/04-常用排序算法/04-常用排序算法.iml" filepath="$PROJECT_DIR$/04-常用排序算法/04-常用排序算法.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/source-analysis.iml" filepath="$PROJECT_DIR$/.idea/source-analysis.iml" />
+    </modules>
+  </component>
+</project>
